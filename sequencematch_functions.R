@@ -63,7 +63,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
     return(tmp)
   }
   series <- sapply(identifications$ms2type, getSeries)
-  color <- sapply(series, function(x) ifelse(x =="p"|x=="w","green", ifelse(x=="b" | x == 
+  color <- sapply(series, function(x) ifelse(x =="p"|x=="w"|x=="n","green", ifelse(x=="b" | x == 
                                                "c", "red", "blue")))
   plot(expt$mz, expt$normalized, type = "h", xlim, ylim = c(0, 
                                                             150), xlab = "m/z", ylab = "intensity (%)", yaxs = "i", 
@@ -333,18 +333,21 @@ FragmentPeptideAmended <- function (sequence, fragments = "by", IAA = TRUE, N15 
       ms2mz <- c(c1, c2, z1, z2)
     }
     water <- MonoisotopicMass(ListFormula("H2O"))
+    ammonia <- MonoisotopicMass(ListFormula("NH2"))
     results_list[[sequence_number]] <- data.frame(ms1seq, 
                                                   ms1z1, ms1z2, ms1z3, ms2seq, ms2type, ms2mz)
     results_list[[sequence_number]] <- rbind(results_list[[sequence_number]],
-                                             data.frame(ms1seq=rep(ms1seq[1],8),
-                                                        ms1z1=rep(ms1z1[1],8),
-                                                        ms1z2=rep(ms1z2[1],8),
-                                                        ms1z3=rep(ms1z3[1],8),
-                                                        ms2seq=rep(ms1seq[1],8),
+                                             data.frame(ms1seq=rep(ms1seq[1],12),
+                                                        ms1z1=rep(ms1z1[1],12),
+                                                        ms1z2=rep(ms1z2[1],12),
+                                                        ms1z3=rep(ms1z3[1],12),
+                                                        ms2seq=rep(ms1seq[1],12),
                                                         ms2type=c("[p0]1+","[p0]2+","[p0]3+","[p0]4+",
-                                                                  "[w0]1+","[w0]2+","[w0]3+","[w0]4+"),
+                                                                  "[w0]1+","[w0]2+","[w0]3+","[w0]4+",
+                                                                  "[n0]1+","[n0]2+","[n0]3+","[n0]4+"),
                                                         ms2mz=c(ms1z1[1],ms1z2[1],ms1z3[1],round((ms1z1[1]+3*proton)/4,5),
-                                                                ms1z1[1]-water,ms1z2[1]-water/2,ms1z3[1]-water/3,round((ms1z1[1]+3*proton)/4-water/4,5))))
+                                                                ms1z1[1]-water,ms1z2[1]-water/2,ms1z3[1]-water/3,round((ms1z1[1]+3*proton)/4-water/4,5),
+                                                                ms1z1[1]-ammonia,ms1z2[1]-ammonia/2,ms1z3[1]-ammonia/3,round((ms1z1[1]+3*proton)/4-ammonia/4,5))))
   }
   return(as.data.frame(do.call("rbind", results_list)))
 }

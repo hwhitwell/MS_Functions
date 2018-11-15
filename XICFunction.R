@@ -55,7 +55,7 @@ XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA,
     
     integral <- peaks
     integral$Count <- peaks[,2]-peaks[,1]
-    integral <- subset(integral,Count>1)
+    integral <- subset(integral,Count>0)
     RT <- vector(length=nrow(integral))
     Intensity <- vector(length=nrow(integral))
     integralValues <- vector(length=(nrow(integral)))

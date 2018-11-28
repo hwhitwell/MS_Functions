@@ -2,7 +2,8 @@
 library(caTools)
 library(ggplot2)
 library(ggrepel)
-source("MSPairSelector_functions_alt.R")
+library(dplyr)
+source("C:/users/hwhitwel.CE-HWHITWEL/Documents/MSPairSelector_functions_alt.R")
 
 XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA, saveListOfMasses=F, threshold=2, peakArea=T, MS2=T){
   
@@ -83,7 +84,17 @@ XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA,
       temp <- XIC[peaks[i,1]:peaks[i,2],]
       temp$PeakNumber=LETTERS[i]
       polygons <- rbind(polygons,temp)
-    } 
+    }
+    polygonsMin <- group_by(polygons,PeakNumber) %>%
+      filter(RT==min(RT)) %>%
+      mutate(Intensity=0,RT=RT-0.000001)
+    polygonsMax <- group_by(polygons,PeakNumber) %>%
+      filter(RT==max(RT)) %>%
+      mutate(Intensity=0,RT=RT+0.000001)
+    polygons <- bind_rows(polygons,polygonsMin,polygonsMax) %>%
+      arrange(PeakNumber,desc(RT)) %>%
+      group_by(PeakNumber) %>%
+      filter(n()>2)
   }
   
   dataheadMS2 <- dataheadMS2[dataheadMS2$precursorMZ>=mass*(1-(tolerance/1000000)) &

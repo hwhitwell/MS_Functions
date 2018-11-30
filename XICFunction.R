@@ -5,12 +5,13 @@ library(ggrepel)
 library(dplyr)
 source("C:/users/hwhitwel.CE-HWHITWEL/Documents/MSPairSelector_functions_alt.R")
 
-XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA, saveListOfMasses=F, threshold=2, peakArea=T, MS2=T){
+XIC <- function(data, mass, charge=2, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA, saveListOfMasses=F, threshold=2, peakArea=T, MS2=T){
   
   if((!is.na(RTRange) & length(RTRange)%%2!=0) |
      (!is.na(MZFilter) & length(MZFilter)%%2!=0)){
     return("For RTRange or MZFilter, min/max values must be provided in a 2 value vector")
   }
+
   
   if(is.na(datahead)){
     datahead <- header(data)
@@ -97,13 +98,9 @@ XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA,
       filter(n()>2)
   }
   
-  dataheadMS2 <- dataheadMS2[dataheadMS2$precursorMZ>=mass*(1-(tolerance/1000000)) &
-                               dataheadMS2$precursorMZ<=mass*(1+(tolerance/1000000)),]
-  
   
   plot <- ggplot(XIC, aes(x=RT, y=Intensity)) +
-    geom_path() +
-    annotate(geom="text", label=paste0("MZ=",mass, "; ppm = ", tolerance), x=-Inf, y=Inf, hjust=-0.01,vjust=1)
+    geom_path()
   
   if(peakArea){
     plot <- plot + geom_polygon(data=polygons, aes(x=RT,y=Intensity,fill=PeakNumber, alpha=0.75), show.legend=F) +
@@ -111,8 +108,29 @@ XIC <- function(data, mass, tolerance=100, datahead=NA, RTRange=NA, MZFilter=NA,
   } 
   
   if(MS2){
-    plot <- plot + geom_segment(data=dataheadMS2, aes(y=-Inf,yend=80,x=retentionTime/60, xend=retentionTime/60),colour="red",linetype="dashed") +
-      geom_text_repel(data=dataheadMS2, aes(label=seqNum, x=retentionTime/60, y=80), size=4, colour="red")
+    dataheadMS2I1 <- dataheadMS2[dataheadMS2$precursorMZ>=mass*(1-(tolerance/1000000)) &
+                                   dataheadMS2$precursorMZ<=mass*(1+(tolerance/1000000)),]
+    
+    dataheadMS2I2 <- dataheadMS2[dataheadMS2$precursorMZ>=(mass+proton/charge)*(1-(tolerance/1000000)) &
+                                   dataheadMS2$precursorMZ<=(mass+proton/charge)*(1+(tolerance/1000000)),]
+    
+    dataheadMS2 <- rbind(dataheadMS2I1,dataheadMS2I2)
+    dataheadMS2$isotope <- c(rep("1st",nrow(dataheadMS2I1)),rep("2nd",nrow(dataheadMS2I2)))
+    
+    if(nrow(dataheadMS2)==0){
+      
+      print("No MS2 found for the mass given")
+      
+    } else {
+      
+      plot <- plot + geom_segment(data=dataheadMS2, aes(y=-Inf,yend=80,x=retentionTime/60, xend=retentionTime/60,colour=isotope),linetype="dashed") +
+        geom_text_repel(data=dataheadMS2, aes(label=seqNum, x=retentionTime/60, y=80, colour=dataheadMS2$isotope), size=4, show.legend = F) +
+        annotate(geom="text", label=paste0("MZ=",mass, "; ppm = ", tolerance, "; charge = ", charge), x=-Inf, y=Inf, hjust=-0.01,vjust=1)
+    
+      }
+  } else {
+    plot <- plot +
+      annotate(geom="text", label=paste0("MZ=",mass, "; ppm = ", tolerance), x=-Inf, y=Inf, hjust=-0.01,vjust=1)
   }
   
   return(plot)

@@ -91,7 +91,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
     }
     y_position[num_identifications] <- identifications$expt_intensity[num_identifications]
     text(identifications$expt_mz, y_position + 12, labels = paste0(identifications$ms2type," ",round(identifications$ms2mz,3)," ",identifications$error), 
-         col = color, srt = 90, cex = 0.9, family="sans")
+         col = color, srt = 90, cex = 0.75, family="sans")
     lines(identifications$expt_mz, identifications$expt_intensity, col=color, type="h", lwd=2)
   }
   seq_vector <- strsplit(as.character(identifications$ms1seq)[1], 
@@ -106,7 +106,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
     else lines(c(num_residues - location[i] + 0.45, num_residues - 
                    location[i] + 0.75), c(8.5, 9.5), col = "blue")
   }
-  text(18, 9, label)
+  text(1, 10, label, pos=4, cex=0.8,col="red")
   return(identifications)
 }
 
@@ -460,9 +460,9 @@ SpectrumFinder <- function(mzxml, minrt=0, maxrt=7200, peptide, tolerance=0.5, b
       if(abs(results$delta[i]) <= deltacutoff){
         msmass <- as.data.frame(peaks(mzxml,which(mzxmltemp$seqNum==results$scan[i])))
       PeptideSpectrum(msmass,pepfragments,tolerance,base,xlim=mzrange,
-                      label=paste("Scan", results$scan[i],
-                                  "\n Score",results$score[i],
-                                  "\n delta (E-O) =",results$delta[i],"Da"),
+                      label=paste0("Scan =", results$scan[i],"; ",
+                                  "Score =",results$score[i],"; ",
+                                  "delta (E-O) =",results$delta[i],"Da"),
                       binwidth=binwidth, numperbin=numperbin)}
     }
     results <<-results

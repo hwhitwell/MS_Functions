@@ -31,7 +31,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
     }
     x <- x+binwidth
   }
-  
+
   expt <- subset(expt, expt$normalized >= b)
   matches <- vector("list")
   for (i in 1:nrow(expt)) {
@@ -50,6 +50,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
   identifications$error <- as.character(format(round(identifications$expt_mz - 
                                    identifications$ms2mz, digits = 4),scientific = F))
     identifications$error[!identifications$error<0] <- paste0("+",identifications$error[!identifications$error<0])
+    identifications <- identifications[!duplicated(identifications$ms2type),]
   num_identifications <- nrow(identifications)
   getLocation <- function(type) {
     tmp <- strsplit(as.character(type), split = "[[:punct:]]")[[1]][2]
@@ -81,12 +82,12 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
             0.025 & all.equal(identifications$expt_intensity[i], 
                               100) != TRUE) {
           y_position[i] <- identifications$expt_intensity[i] + 
-            40
+            35
           lines(rep(identifications$expt_mz[i], 2), c(identifications$expt_intensity[i], 
                                                       identifications$expt_intensity[i] + 30), 
                 lty = "dotted", col = color[i])
         }
-        else y_position[i] <- identifications$expt_intensity[i]
+        else y_position[i] <- identifications$expt_intensity[i] + 5
       }
     }
     y_position[num_identifications] <- identifications$expt_intensity[num_identifications]

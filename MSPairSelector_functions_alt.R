@@ -441,8 +441,8 @@ matchedComplemetaryPeaks <- function(data, A, B, massShift=4, binwidth=100, numP
 }
 
 #Identifies peaks in spectra.
-peakpicker <- function(peaklist, threshold=2){
-  peak <- ifelse(peaklist[,2]<threshold,0,1)
+peakpicker <- function(peaklist, threshold=2, normalisedColumn=2){
+  peak <- ifelse(peaklist[,normalisedColumn]<threshold,0,1)
   if(peak[length(peak)]==1){
     peak <- c(peak,0)
   }

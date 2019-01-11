@@ -114,26 +114,29 @@ sequencepairs <- function(data, rtInterval=120, massShift=4, binwidth=100, numPe
   return(potentialSpectra)
 }
 
-#Generates a plot from MS peak list with peak filtering
-spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLabels=NA, precursorCharge=NA){
-  datahead <- header(data)
-  if(is.na(precursorCharge)){
-    precursorCharge <- datahead$precursorCharge
+precursorPlot <- function(data, scan, mzRange=NA, labels=T, numLabels=NA, datahead=NA){
+  if(!is.data.frame(datahead)){
+    datahead <- header(data) 
   }
-  datahead$precursorDa <- datahead$precursorMZ * precursorCharge - (precursorCharge * 1.007276)
-  peaks <- as.matrix(peaks(data,which(datahead$acquisitionNum==scan)))
+  RT <- datahead[scan,"retentionTime"]
+  
+  peaks <- as.matrix(peaks(data,scan))
+  peaks <- as.data.frame(peaks)
+  
+  if(!is.na(mzRange))
+    peaks <- peaks[which(peaks[,1]>min(mzRange) & peaks[,1]<max(mzRange)),]
+  
   peaks[,2] <- peaks[,2]/max(peaks[,2])*100
   
-  peaks <- binning(peaks,binwidth=binwidth,numPerBin=numPerBin)
   
   plot <- ggplot() + 
     geom_linerange(data=peaks,aes(x=V1,ymin=0,ymax=V2)) + 
-    geom_vline(aes(xintercept=(datahead[which(datahead$acquisitionNum==scan),"precursorDa"]+1.007276*2)/2),color="red",linetype="dashed") +
-    ggtitle(paste("Scan = ",scan),subtitle = paste("PrecursorDa = ", round(datahead[which(datahead$acquisitionNum==scan),"precursorDa"],2))) +
+    ggtitle("",subtitle=paste0("Scan = ",scan, ", RT = ",round(RT/60,2))) +
     ylab("Normalised Intensity") +
     xlab("m/z")
   
   if(labels){
+    peaks <- peaks[order(peaks$V2,decreasing = T),]
     peakslabel <- peaks[!duplicated(round(peaks[,1],1)),]
     if(!is.na(numLabels)){
       peakslabel <- peakslabel[order(peakslabel[,2],decreasing=T),][1:numLabels,]
@@ -143,10 +146,56 @@ spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLab
   return(plot)
 }
 
+#Generates a plot from MS peak list with peak filtering
+spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLabels=NA, precursorCharge=NA, subtitle="mz", datahead=NA){
+  if(subtitle!="mz" & subtitle!="Da")
+    return("Subtitle must be `mz` or `Da`")
+  
+  if(!is.data.frame(datahead)){
+    datahead <- header(data)
+  }
+  
+  datahead <- datahead[which(datahead$acquisitionNum==scan),]
+  if(subtitle=="Da"){
+    if(is.na(precursorCharge)){
+      sublabel <- paste("PrecursorDa =",round(datahead$precursorMZ * datahead$precursorCharge - (datahead$precursorCharge * proton),2))
+    }
+    sublabel <- paste("PrecursorDa =",round(datahead$precursorMZ * precursorCharge - (precursorCharge * proton),2))
+  } else {
+    sublabel <- paste("PrecursorMZ =",round(datahead$precursorMZ,2))
+  }
+  
+  peaks <- as.matrix(peaks(data,scan))
+  peaks[,2] <- peaks[,2]/max(peaks[,2])*100
+  
+  peaks <- binning(peaks,binwidth=binwidth,numPerBin=numPerBin)
+  
+  plot <- ggplot() + 
+    geom_linerange(data=peaks,aes(x=V1,ymin=0,ymax=V2)) + 
+    ggtitle(paste("Scan = ",scan),subtitle = sublabel) +
+    ylab("Normalised Intensity") +
+    xlab("m/z")
+  
+  if(labels){
+    peaks <- peaks[order(peaks$V2,decreasing = T),]
+    peakslabel <- peaks[!duplicated(round(peaks[,1],1)),]
+    if(!is.na(numLabels)){
+      peakslabel <- peakslabel[order(peakslabel[,2],decreasing=T),][1:numLabels,]
+    }
+    plot <- plot + geom_text_repel(data=peakslabel,aes(x=V1,y=V2+1,label=as.character(round(V1,1))),color="blue")
+  }
+  return(plot)
+}
+
 #Puts two spectra next to each other (calls spectraplot twice)
-sideBySidePlot <- function(data,scan1,scan2, binwidth=100, numPerBin=10, labels=T, numLabels=NA){
-  plot1 <- spectraplot(data,scan1,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels)
-  plot2 <- spectraplot(data,scan2,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels)
+sideBySidePlot <- function(data,scan1,scan2, binwidth=100, numPerBin=10, labels=T, numLabels=NA, datahead=NA){
+  
+  if(!is.data.frame(datahead)){
+    datahead <- header(data)
+  }
+  
+  plot1 <- spectraplot(data,scan1,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead)
+  plot2 <- spectraplot(data,scan2,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead)
   return(plot_grid(plot1,plot2))
 }
 
@@ -169,7 +218,21 @@ binning <- function(peaks, binwidth, numPerBin){
 }
 
 #Calculates regression of matched ions and matched complementary ions in two spectra, returning paisr that match the filter criteria
-matchedRegression <- function(data, datahead, A, B, binwidth=100, numPerBin=10, tolerance=0.3,complementTolerance=0.5, plot=F, Filtered=T){
+matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=10, tolerance=0.5,complementTolerance=0.8, plot=F, Filtered=F, normalise=T, productCutoff=NA, massShift=4.022185){
+  if(!is.logical(Filtered)){
+    return("Filtered not logical (T or F)")
+  }
+  if(!is.logical(plot)){
+    return("Plot not logical (T or F)")
+  }
+  if(!is.logical(normalise)){
+    return("normalise not logical (T or")
+  }
+  
+  if(!is.data.frame(datahead)){
+    datahead <- header(data)
+  }
+  datahead$precursorDa <- precursorMass(datahead)
   #Generate matrix of mz and intensities for each scan
   peaksA <- peaks(data, which(datahead$acquisitionNum==A))
   peaksB <- peaks(data, which(datahead$acquisitionNum==B))
@@ -177,6 +240,11 @@ matchedRegression <- function(data, datahead, A, B, binwidth=100, numPerBin=10, 
   #Filter peak lists by top x in binwidth y
   peaksA <- binning(peaksA,binwidth=binwidth,numPerBin=numPerBin)
   peaksB <- binning(peaksB,binwidth=binwidth,numPerBin=numPerBin)
+  
+  if(normalise){
+    peaksA[,2] <- peaksA[,2]/max(peaksA[,2])
+    peaksB[,2] <- peaksB[,2]/max(peaksB[,2])
+  }
   
   #Iterate through masses in peaksA, looking for matching peaks in B. Filtering by most intense peaks within the tolerance window.
   peaksA <- peaksA[order(peaksA[,2],decreasing = T),]
@@ -198,31 +266,40 @@ matchedRegression <- function(data, datahead, A, B, binwidth=100, numPerBin=10, 
   }
   if(nrow(hitsA)!=0 & nrow(hitsB)!=0){
     hits <- cbind(hitsA,hitsB[,2])
+    hits <- hits[!duplicated(hits),]
+    colnames(hits) <- c("MZ","Intensity_A","Intensity_B")
+    
+    
     if(nrow(hits)>datahead[which(datahead$acquisitionNum==A),"precursorDa"]/200 &
        nrow(hits)>3){
       
-      colnames(hits) <- c("MZ","Intensity_A","Intensity_B")
-      
-      #calculate Peasons produce moment correlation coefficient, printing the plots and ultimatly returning the correlation score.
+      #calculate Peasons product moment correlation coefficient, printing the plots and ultimatly returning the correlation score.
       correlation <- with(hits,cor.test(Intensity_A,Intensity_B))
-      if(Filtered==T & correlation$estimate[[1]]<0.6){
+      correlation <- c(correlation$estimate[[1]],correlation$p.value)
+      #Gradient is determined for linear regression.
+      Gdt <- with(hits,lm(Intensity_B~Intensity_A))$coefficients[2]
+      if(Filtered==T & correlation[1]<0.6){
         return(data.frame(A=numeric(0),B=numeric(0)))
       }
       
       if(plot==T){
-        plot1 <- ggplot(hits, aes(x=Intensity_A/max(Intensity_A)*100,y=Intensity_B/max(Intensity_B)*100)) +
+        samePlot <<- ggplot(hits, aes(x=Intensity_A,y=Intensity_B)) +
           geom_point(aes(colour=MZ)) +
           geom_smooth(method="lm") +
-          xlab(paste0("normalised intensity (",A,")")) +
-          ylab(paste0("normalised intensity (",B,")")) +
-          ggtitle("Matched Ions",subtitle=paste0("PPMCC=",round(correlation$estimate,3)," P-value=",round(correlation$p.value,5)))
+          xlab(paste0("Intensity (",A,")")) +
+          ylab(paste0("Intensity (",B,")")) +
+          ggtitle("Matched Ions",subtitle=paste0("PPMCC=",round(correlation[1],3)," P-value=",round(correlation[2],5)))+
+          scale_y_log10() +
+          scale_x_log10()
         
-        print(plot1)}
+        print(samePlot)}
       
-      #Predict the mass of complementary masses (precursor mass[M+H] - matched ion mass) for A
+      #Predict the mass of complementary masses (precursor mass[M+H] - matched ion mass) for A assuming +1 or +2
       predictedComplementary <- hits[,1]
-      predictedComplementary <- datahead[which(datahead$acquisitionNum==A),"precursorDa"] + 2*1.007276 - predictedComplementary
-      #Look for the predicted ions in A within tolerance of 0.3Da
+      predictedComplementary <- c(datahead[which(datahead$acquisitionNum==A),"precursorDa"] + 2*proton - predictedComplementary,
+                                  (datahead[which(datahead$acquisitionNum==A),"precursorDa"] + 2*proton)/2 - predictedComplementary + proton)
+      predictedComplementary <- predictedComplementary[predictedComplementary>100]
+      #Look for the predicted ions in A within tolerance
       complementaryHitsA <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
       for(i in 1:length(predictedComplementary)){
         tempA <- peaksA[which(abs(predictedComplementary[i]-peaksA[,1])<=complementTolerance),]
@@ -231,12 +308,12 @@ matchedRegression <- function(data, datahead, A, B, binwidth=100, numPerBin=10, 
         } 
       }
       
-      if(Filtered==T & nrow(complementaryHitsA)<=2){
+      if(nrow(complementaryHitsA)<=0){
         return(data.frame(A=numeric(0),B=numeric(0)))
       }
       
       #Match these against B with the appropriate mass adjustment
-      delta <- ifelse(datahead[which(datahead$acquisitionNum==A),"precursorDa"]<datahead[which(datahead$acquisitionNum==B),"precursorDa"],4,-4)
+      delta <- ifelse(datahead[which(datahead$acquisitionNum==A),"precursorDa"]<datahead[which(datahead$acquisitionNum==B),"precursorDa"],massShift,-massShift)
       complementaryA <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
       complementaryB <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
       for(i in 1:nrow(complementaryHitsA)){
@@ -247,51 +324,193 @@ matchedRegression <- function(data, datahead, A, B, binwidth=100, numPerBin=10, 
         }
       }
       
-      if(Filtered==T & (nrow(complementaryA)<=2 & nrow(complementaryB)<=2)){
+      if(nrow(complementaryA)>0 & nrow(complementaryB)>0){
+        results <- cbind(complementaryA,complementaryB)
+        results <- results[!duplicated(results),]
+      }
+      
+      if(nrow(complementaryA)<3 & nrow(complementaryB)<3){
+        allMatchedMZ <- results[,c(1,2,4)]
+        colnames(allMatchedMZ) <- c("MZ","Intensity_A","Intensity_B")
+        allMatchedMZ$Type <- rep("Complementary",nrow(results))
+        hits_temp <- hits
+        hits_temp$Type <- rep("Same",nrow(hits))
+        allMatchedMZ <-rbind(allMatchedMZ,hits_temp)
+        matchedIons <<- allMatchedMZ
+        rm(hits_temp)
+        
+        complementaryResults <- c(NA,NA,NA,NA)
+        results <- data.frame("MZ_A"=NA,"Intensity_A"=NA,"MZ_B"=NA,"Intensity_B"=NA)
+        ComplementaryGdt=NA
+        allResults <- c(NA,NA)
+        AllGdt=NA
+        
+        thresholdedGdt <- "cutoff not set"
+        thresholdedPPMCC <- "cutoff not set"
+        
+        if(!is.na(productCutoff)){
+          allMatchedMZ$Product <- with(allMatchedMZ, Intensity_A*Intensity_B)
+          allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product > productCutoff),]
+          num_aa <- (datahead[A,"precursorDa"]/110)-1
+          allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product>productCutoff),]
+          allMatchedMZ <- rbind(allMatchedMZ,c(0,0,0,NA,0))
+          thresholdedGdt <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,lm(Intensity_B~Intensity_A))$coefficients[[2]],"Below threshold")
+          thresholdedPPMCC <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,cor(Intensity_B,Intensity_A)), "Below threshold")
+        }
+        
+        results <- data.frame("A"=A,"B"=B,
+                              "PPMCC"=correlation[1],
+                              "P-Val"=correlation[2],
+                              "Gdt"=Gdt,
+                              "ComplementaryPPMCC"=complementaryResults[1],
+                              "ComplementaryPVal"=complementaryResults[2],
+                              "ComplementaryGdt"=ComplementaryGdt,
+                              "AllPPMCC"=allResults[1],
+                              "AllPVal"=allResults[2],
+                              "AllGdt"=AllGdt,
+                              "NumHits"=nrow(hits),
+                              "thresholdedGdt"=thresholdedGdt,
+                              "thresholdedPPMCC"=thresholdedPPMCC,
+                              "HitIntensity_A"=mean(hits$Intensity_A),
+                              "HitIntensity_B"=mean(hits$Intensity_B),
+                              "ComplementaryHits"=nrow(results),
+                              "ComplementaryIntensity_A"=mean(results$Intensity_A),
+                              "ComplementaryIntensity_B"=mean(results$Intensity_B),
+                              "A_mz"=datahead[A,"precursorMZ"],
+                              "B_mz"=datahead[B,"precursorMZ"],
+                              "A_RT"=datahead[A,"retentionTime"]/60,
+                              "B_RT"=datahead[B,"retentionTime"]/60,
+                              "A_Charge"=datahead[A,"precursorCharge"],
+                              "B_Charge"=datahead[B,"precursorCharge"])
+        return(results)
+      }
+      colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
+      
+      allMatchedMZ <- results[,c(1,2,4)]
+      colnames(allMatchedMZ) <- c("MZ","Intensity_A","Intensity_B")
+      allMatchedMZ$Type <- rep("Complementary",nrow(results))
+      hits_temp <- hits
+      hits_temp$Type <- rep("Same",nrow(hits))
+      allMatchedMZ <-rbind(allMatchedMZ,hits_temp)
+      matchedIons <<- allMatchedMZ
+      rm(hits_temp)
+      
+      if(nrow(results)>2){
+        correlation2 <- with(results,cor.test(Intensity_A,Intensity_B))
+        correlation2 <- c(correlation2$estimase,correlation2$p.value)
+        ComplementaryGdt <- with(results,lm(Intensity_B~Intensity_A))$coefficients[2]
+      } else {
+        correlation2 <- c(NA,NA)
+        ComplementaryGdt <- NA
+      }
+      correlation3 <- with(allMatchedMZ,cor.test(Intensity_A,Intensity_B))
+      allResults <- c(correlation3$estimate[[1]],correlation3$p.value)
+      AllGdt <- with(allMatchedMZ,lm(Intensity_B~Intensity_A))$coefficients[2]
+      
+      if(Filtered==T & (correlation2[1]<0.7 | correlation2[2]>0.05 | is.na(correlation2[2])==T)){
         return(data.frame(A=numeric(0),B=numeric(0)))
       }
       
-      if(nrow(complementaryA)>2 & nrow(complementaryB)>2){
-        results <- cbind(complementaryA,complementaryB)
-        colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
+      complementaryResults <- c(correlation2[1],correlation2[2])
+      if(plot==T){
+        complementPlot <<- ggplot(results, aes(Intensity_A,Intensity_B)) +
+          geom_point(aes(colour=MZ_A)) +
+          geom_smooth(method="lm") +
+          ylab(paste0("Intensity (",B,")")) +
+          xlab(paste0("Intensity (",A,")")) +
+          ggtitle("Complementary Matches",subtitle=paste0("PPMCC=",round(correlation2[1],3)," P-value=",round(correlation2[2],5))) +
+          scale_y_log10() +
+          scale_x_log10()
+        print(complementPlot)
         
-        correlation2 <- with(results,cor.test(Intensity_A,Intensity_B))
-        
-        if(Filtered==T & (correlation2$estimate[[1]]<0.7 | correlation2$p.value>0.05 | is.na(correlation2$p.value)==T)){
-          return(data.frame(A=numeric(0),B=numeric(0)))
-        }
-        
-        complementaryResults <- c(correlation2$estimate[[1]],correlation2$p.value)
-        if(plot==T){
-          plot2 <- ggplot(results, aes(Intensity_A/max(Intensity_A)*100,Intensity_B/max(Intensity_B)*100)) +
-            geom_point(aes(colour=MZ_A)) +
-            geom_smooth(method="lm") +
-            ylab(paste0("Normalised intensity (",B,")")) +
-            xlab(paste0("Normalised intensity (",A,")")) +
-            ggtitle("Complementary Matches",subtitle=paste0("PPMCC=",round(correlation2$estimate,3)," P-value=",round(correlation2$p.value,5))) 
-          print(plot2)
-        }
-      } else {complementaryResults <- c(NA,NA,NA,NA)
-      results <- data.frame("MZ_A"=NA,"Intensity_A"=NA,"MZ_B"=NA,"Intensity_B"=NA)}
-      
-      colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
-      
-      results <- data.frame("A"=A,"B"=B,
-                            "PPMCC"=correlation$estimate[[1]],
-                            "P-Val"=correlation$p.value,
-                            "ComplementaryPPMCC"=complementaryResults[1],
-                            "ComplementaryPVal"=complementaryResults[2],
-                            "NumHits"=nrow(hits),
-                            "HitIntensity_A"=mean(hits$Intensity_A),
-                            "HitIntensity_B"=mean(hits$Intensity_B),
-                            "ComplementaryHits"=nrow(results),
-                            "ComplementaryIntensity_A"=mean(results$Intensity_A),
-                            "ComplementaryIntensity_B"=mean(results$Intensity_B))
-      return(results)
-    } else return(data.frame(A=numeric(0),B=numeric(0)))
-  } else return(data.frame(A=numeric(0),B=numeric(0)))
+        allPlot <<- ggplot(allMatchedMZ, aes(Intensity_A,Intensity_B)) +
+          geom_point(aes(colour=MZ)) +
+          geom_smooth(method="lm") +
+          ylab(paste0("Intensity (",B,")")) +
+          xlab(paste0("Intensity (",A,")")) +
+          ggtitle("All Matched",subtitle=paste0("PPMCC=",round(correlation3$estimate,3)," P-value=",round(correlation3$p.value,5))) +
+          scale_y_log10() +
+          scale_x_log10()
+        print(allPlot)
+      }
+    } else {complementaryResults <- c(NA,NA,NA,NA)
+    results <- data.frame("MZ_A"=NA,"Intensity_A"=NA,"MZ_B"=NA,"Intensity_B"=NA)
+    ComplementaryGdt=NA
+    allResults <- c(NA,NA)
+    AllGdt=NA
+    allMatchedMZ <- hits
+    allMatchedMZ <- cbind(allMatchedMZ,data.frame(Type=rep("Same",nrow(allMatchedMZ)),Product=rep(0,nrow(allMatchedMZ))))
+    correlation <- c(NA,NA)
+    Gdt <- NA
+    }
+    colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
+  } else {
+    return(data.frame(A=numeric(0),B=numeric(0)))
+  }
+  
+  thresholdedGdt <- "cutoff not set"
+  thresholdedPPMCC <- "cutoff not set"
+  
+  if(!is.na(productCutoff)){
+    allMatchedMZ$Product <- with(allMatchedMZ, Intensity_A*Intensity_B)
+    allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product > productCutoff),]
+    num_aa <- (datahead[A,"precursorDa"]/110)-1
+    allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product>productCutoff),]
+    allMatchedMZ <- rbind(allMatchedMZ,c(0,0,0,NA,0))
+    thresholdedGdt <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,lm(Intensity_B~Intensity_A))$coefficients[[2]],"Below threshold")
+    thresholdedPPMCC <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,cor(Intensity_B,Intensity_A)), "Below threshold")
+  }
+  
+  if(plot==T & nrow(allMatchedMZ)>0){
+    x <- seq(0,1,0.0001)
+    y <- productCutoff/x
+    
+    points <- data.frame(x=x,y=y,cutoff=rep(productCutoff,length(x)))
+    points <- points[-which(points$y==Inf),]
+    points <- rbind(c(0,0,productCutoff),points,c(0,0,productCutoff))
+    points$cutoff <- as.factor(points$cutoff)
+    points <- points[which(points$y<1),]
+    
+    cutoffPlot <<- ggplot(points, aes(x,y)) +
+      geom_polygon(fill="blue",alpha=0.3) +
+      geom_point(data=allMatchedMZ, aes(x=Intensity_A,y=Intensity_B,colour=Type)) +
+      ylab(paste0("Intensity (",B,")")) +
+      xlab(paste0("Intensity (",A,")")) +
+      scale_x_log10() +
+      scale_y_log10() +
+      ggtitle(paste0("Cutoff = ",productCutoff))
+    
+    print(cutoffPlot)
+  }
+  
+  results <- data.frame("A"=A,"B"=B,
+                        "PPMCC"=correlation[1],
+                        "P-Val"=correlation[2],
+                        "Gdt"=Gdt,
+                        "ComplementaryPPMCC"=complementaryResults[1],
+                        "ComplementaryPVal"=complementaryResults[2],
+                        "ComplementaryGdt"=ComplementaryGdt,
+                        "AllPPMCC"=allResults[1],
+                        "AllPVal"=allResults[2],
+                        "AllGdt"=AllGdt,
+                        "NumHits"=nrow(hits),
+                        "thresholdedGdt"=thresholdedGdt,
+                        "thresholdedPPMCC"=thresholdedPPMCC,
+                        "HitIntensity_A"=mean(hits$Intensity_A),
+                        "HitIntensity_B"=mean(hits$Intensity_B),
+                        "ComplementaryHits"=nrow(results),
+                        "ComplementaryIntensity_A"=mean(results$Intensity_A),
+                        "ComplementaryIntensity_B"=mean(results$Intensity_B),
+                        "A_mz"=datahead[A,"precursorMZ"],
+                        "B_mz"=datahead[B,"precursorMZ"],
+                        "A_RT"=datahead[A,"retentionTime"]/60,
+                        "B_RT"=datahead[B,"retentionTime"]/60,
+                        "A_Charge"=datahead[A,"precursorCharge"],
+                        "B_Charge"=datahead[B,"precursorCharge"])
+  return(results)
 }
 matchedRegression <- cmpfun(matchedRegression)
+
 
 #Calculates precursor mass from mxXML header
 precursorMass <- function(datahead){
@@ -300,8 +519,10 @@ precursorMass <- function(datahead){
 }
 
 #Compares multiple  spectra using matchedRegression
-regressionPairs <- function(data, rtInterval=120, massShift=4, binwidth=100, numPerBin=10, tolerance=0.3, complementTolerance=0.5, plot=F, suppressProgressBar=F, Filtered=T){
-  datahead <- header(data)
+regressionPairs <- function(data, rtInterval=120, massShift=4.022185, binwidth=100, numPerBin=10, tolerance=0.5, complementTolerance=0.8, plot=F, suppressProgressBar=F, Filtered=F, datahead=NA, normalise=T, productCutoff=NA){
+  if(!is.data.frame(datahead)){
+    datahead <- header(data)
+  }
   datahead$precursorDa <- precursorMass(datahead)
   ms2 <- subset(datahead,msLevel==2)
   
@@ -309,37 +530,59 @@ regressionPairs <- function(data, rtInterval=120, massShift=4, binwidth=100, num
                         "B"=integer(0),
                         "PPMCC"=numeric(0),
                         "P-Val"=numeric(0),
+                        "Gdt"=numeric(0),
                         "ComplementaryPPMCC"=numeric(0),
                         "ComplementaryPVal"=numeric(0),
+                        "ComplementaryGdt"=numeric(0),
+                        "AllPPMCC"=numeric(0),
+                        "AllPVal"=numeric(0),
+                        "AllGdt"=numeric(0),
                         "NumHits"=numeric(0),
                         "HitIntensity_A"=numeric(0),
                         "HitIntensity_B"=numeric(0),
                         "ComplementaryHits"=numeric(0),
                         "ComplementaryIntensity_A"=numeric(0),
-                        "ComplementaryIntensity_B"=numeric(0))
+                        "ComplementaryIntensity_B"=numeric(0),
+                        "A_mz"=numeric(0),
+                        "B_mz"=numeric(0),
+                        "A_RT"=numeric(0),
+                        "B_RT"=numeric(0),
+                        "A_Charge"=numeric(0),
+                        "B_Charge"=numeric(0))
   
-  for(i in 1:nrow(ms2)){
+    for(i in 1:nrow(ms2)){
     temp <- ms2[which(ms2$retentionTime>(ms2$retentionTime[i]-rtInterval) &
                         ms2$retentionTime<(ms2$retentionTime[i]+rtInterval)),]
     
-    temp <- temp[which(abs(temp$precursorDa-ms2$precursorDa[i])<(massShift+2) &
-                         abs(temp$precursorDa-ms2$precursorDa[i])>(massShift-2)),]
+    temp <- temp[which(abs(temp$precursorDa-ms2$precursorDa[i])<(massShift+0.5) &
+                         abs(temp$precursorDa-ms2$precursorDa[i])>(massShift-0.5)),]
     
     tempresults <- data.frame("A"=integer(0),
                               "B"=integer(0),
                               "PPMCC"=numeric(0),
                               "P-Val"=numeric(0),
+                              "Gdt"=numeric(0),
                               "ComplementaryPPMCC"=numeric(0),
                               "ComplementaryPVal"=numeric(0),
+                              "ComplementaryGdt"=numeric(0),
+                              "AllPPMCC"=numeric(0),
+                              "AllPVal"=numeric(0),
+                              "AllGdt"=numeric(0),
                               "NumHits"=numeric(0),
                               "HitIntensity_A"=numeric(0),
                               "HitIntensity_B"=numeric(0),
                               "ComplementaryHits"=numeric(0),
                               "ComplementaryIntensity_A"=numeric(0),
-                              "ComplementaryIntensity_B"=numeric(0))
+                              "ComplementaryIntensity_B"=numeric(0),
+                              "A_mz"=numeric(0),
+                              "B_mz"=numeric(0),
+                              "A_RT"=numeric(0),
+                              "B_RT"=numeric(0),
+                              "A_Charge"=numeric(0),
+                              "B_Charge"=numeric(0))
     if(nrow(temp)>0){
       for(j in 1:nrow(temp)){
-        hits <- matchedRegression(data,datahead,ms2$acquisitionNum[i],temp$acquisitionNum[j],binwidth=binwidth,numPerBin=numPerBin,tolerance=tolerance, complementTolerance = complementTolerance,plot=plot, Filtered=Filtered)
+        hits <- matchedRegression(data,datahead,ms2$acquisitionNum[i],temp$acquisitionNum[j],binwidth=binwidth,numPerBin=numPerBin,tolerance=tolerance, complementTolerance = complementTolerance,plot=plot, Filtered=Filtered, normalise=normalise, productCutoff=productCutoff, massShift=massShift)
         if(nrow(hits)>0)
           tempresults <- rbind(tempresults,hits)
       }
@@ -348,97 +591,13 @@ regressionPairs <- function(data, rtInterval=120, massShift=4, binwidth=100, num
       results <- rbind(results,tempresults) 
     }
     if(suppressProgressBar==F){
-      print(paste(i, " of ", nrow(ms2), " (",round(i/nrow(ms2)*100,2),"%)"," complete"))
+      print(paste0(i, " of ", nrow(ms2), " (",round(i/nrow(ms2)*100,2),"%)"," complete"))
       print(paste0("||",paste(rep("=",round(i/nrow(ms2)*100,0)),collapse=""),paste(rep("_",100-round(i/nrow(ms2)*100,0)),collapse=""),"||")) 
     }
   }
   return(results)
 }
 regressionPairs <- cmpfun(regressionPairs)
-
-#Called by matchedRegression.
-matchedComplemetaryPeaks <- function(data, A, B, massShift=4, binwidth=100, numPerBin=10, tolerance=1, plot=F, Filtered){
-  #Generate table of header data
-  datahead <- header(data)
-  datahead$precursorDa <- datahead$precursorMZ * datahead$precursorCharge - (datahead$precursorCharge * 1.007276)
-  
-  #Generate matrix of mz and intensities for each scan, ordered by normalised intensity
-  peaksA <- peaks(data, which(datahead$acquisitionNum==A))
-  peaksA[,2] <- peaksA[,2]/max(peaksA[,2])*100
-  peaksB <- peaks(data, which(datahead$acquisitionNum==B))
-  peaksB[,2] <- peaksB[,2]/max(peaksB[,2])*100
-  
-  #Filter peak lists by top x in binwidth y
-  peaksA <- binning(peaksA,binwidth=binwidth,numPerBin=numPerBin)
-  peaksB <- binning(peaksB,binwidth=binwidth,numPerBin=numPerBin)
-  
-  #Iterate through masses in peaksA, looking for matching peaks in B. Filtering by most intense peaks within the tolerance window.
-  peaksA <- peaksA[order(peaksA[,2],decreasing = T),]
-  peaksB <- peaksB[order(peaksB[,2],decreasing = T),]
-  colnames(peaksA) <- c("MZ","Intensity")
-  colnames(peaksB) <- c("MZ","Intensity")
-  hitsA <- data.frame(MZ=numeric(0), Intensity=numeric(0))
-  hitsB <- data.frame(MZ=numeric(0), Intensity=numeric(0))
-  for(i in 1:nrow(peaksA)){
-    tempA <- peaksA[which(abs((peaksA[i,1]-peaksA[,1]))<=tolerance),]
-    if(nrow(tempA)!=0){
-      tempA <- tempA[1,]
-      tempB <- peaksB[which(abs((tempA[,1]-peaksB[,1]))<=tolerance),]
-      if(nrow(tempB)!=0){
-        hitsA <- rbind(hitsA,tempA)
-        hitsB <- rbind(hitsB,tempB[1,])
-      }
-    }
-  }
-  if(nrow(hitsA)!=0 & nrow(hitsB)!=0){
-    hits <- cbind(hitsA,hitsB)
-    if(nrow(hits)>datahead[which(datahead$acquisitionNum==A),"precursorDa"]/200 &
-       nrow(hits)>3){
-      
-      colnames(hits) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
-      
-      #Predict the mass of complementary masses (precursor mass[M+H] - matched ion mass) for A
-      predictedComplementary <- hits[,1]
-      predictedComplementary <- datahead[which(datahead$acquisitionNum==A),"precursorDa"] + 1.007276 - predictedComplementary
-      #Look for the predicted ions in A within tolerance of 0.3Da
-      complementaryHitsA <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
-      for(i in 1:length(predictedComplementary)){
-        tempA <- peaksA[which(abs(predictedComplementary[i]-peaksA[,1])<=tolerance),]
-        if(nrow(tempA)!=0){
-          complementaryHitsA <- rbind(complementaryHitsA,tempA[1,])
-        }
-      }
-      #Match these against B with the appropriate mass adjustment
-      delta <- ifelse(datahead[which(datahead$acquisitionNum==A),"precursorDa"]<datahead[which(datahead$acquisitionNum==B),"precursorDa"],4,-4)
-      complementaryA <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
-      complementaryB <- data.frame("MZ"=numeric(0),"Intensity"=numeric(0))
-      for(i in 1:nrow(complementaryHitsA)){
-        tempB <- peaksB[which(abs(peaksB[,1]-(complementaryHitsA[i,1]+delta))<=tolerance),]
-        if(nrow(tempB)!=0){
-          complementaryA <- rbind(complementaryA, complementaryHitsA[i,])
-          complementaryB <- rbind(complementaryB, tempB[1,])
-        }
-      }
-      if(nrow(complementaryA)>2 & nrow(complementaryB)>2){
-        results <- cbind(complementaryA,complementaryB)
-        colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
-        
-        correlation <- with(results,cor.test(Intensity_A,Intensity_B))
-        
-        if(plot==T){
-          plot <- ggplot(results, aes(Intensity_A,Intensity_B)) +
-            geom_point(aes(colour=MZ_A)) +
-            geom_smooth(method="lm") +
-            ylab(paste0(B," Intensity")) +
-            xlab(paste0(A," Intensity")) +
-            ggtitle("",subtitle=paste0("PPMCC=",round(correlation$estimate,3)," P.Val=",round(correlation$p.value,5))) 
-          print(plot)
-        }
-        return(data.frame("A"=A,"B"=B,"PPMCC"=correlation$estimate[[1]],"P-Val"=correlation$p.value)) 
-      } else return(data.frame(A=numeric(0),B=numeric(0)))
-    } else return(data.frame(A=numeric(0),B=numeric(0)))
-  } else return(data.frame(A=numeric(0),B=numeric(0)))
-}
 
 #Identifies peaks in spectra.
 peakpicker <- function(peaklist, threshold=2, normalisedColumn=2){
@@ -524,7 +683,12 @@ peakBinning <- function(peakList,peakPickThreshold=2,binThreshold=0.004,plot=T){
 }
 
 #Identifies if a precursorMZ has a heavy pair in an MS1 spectra and if so performs convovle function.
-convolveFunction <- function(raw,datahead,scan,heavyShift=4.02218, binThreshold=0.004, plot=T){
+convolveFunction <- function(raw,datahead=NA,scan,heavyShift=4.02218, binThreshold=0.004, plot=T){
+  if(!is.data.frame(datahead)){
+    datahead <- header(raw)
+  }
+  datahead$precursorDa <- precursorMass(datahead)
+  
   scanType <- datahead[which(datahead$acquisitionNum==scan),"msLevel"]
   if(scanType!=2){
     results <- data.frame(MS2Scan=scan,

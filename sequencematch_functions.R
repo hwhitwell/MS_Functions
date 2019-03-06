@@ -65,7 +65,7 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
   }
   series <- sapply(identifications$ms2type, getSeries)
   color <- sapply(series, function(x) ifelse(x =="p"|x=="w"|x=="n","green", ifelse(x=="b" | x == 
-                                               "c", "red", "blue")))
+                                               "c" | x == "a", "red", "blue")))
   plot(expt$mz, expt$normalized, type = "h", xlim, ylim = c(0, 
                                                             150), xlab = "m/z", ylab = "intensity (%)", yaxs = "i", 
        yaxt = "n")
@@ -99,13 +99,13 @@ PeptideSpectrum <- function (expt, theory, t = 0.4, b = 5, label = "", xlim = c(
                          split = "")[[1]]
   num_residues <- length(seq_vector)
   plot.window(xlim = c(1, 20), ylim = c(0, 10))
-  text(c(1:num_residues), 9, labels = seq_vector)
+  text(c(1:num_residues)*0.8, 9, labels = seq_vector, cex=1)
   for (i in 1:length(series)) {
-    if (series[i] == "b" | series[i] == "c") 
-      lines(c(location[i] + 0.25, location[i] + 0.55), 
+    if (series[i] == "b" | series[i] == "c" | series[i] == "a") 
+      lines(c(location[i] + 0.25, location[i] + 0.55)*0.8, 
             c(8.5, 9.5), col = "red")
     else lines(c(num_residues - location[i] + 0.45, num_residues - 
-                   location[i] + 0.75), c(8.5, 9.5), col = "blue")
+                   location[i] + 0.75)*0.8, c(8.5, 9.5), col = "blue")
   }
   text(1, 10, label, pos=4, cex=0.8,col="red")
   return(identifications)
@@ -349,6 +349,16 @@ FragmentPeptideAmended <- function (sequence, fragments = "by", IAA = TRUE, N15 
                                                         ms2mz=c(ms1z1[1],ms1z2[1],ms1z3[1],round((ms1z1[1]+3*proton)/4,5),
                                                                 ms1z1[1]-water,ms1z2[1]-water/2,ms1z3[1]-water/3,round((ms1z1[1]+3*proton)/4-water/4,5),
                                                                 ms1z1[1]-ammonia,ms1z2[1]-ammonia/2,ms1z3[1]-ammonia/3,round((ms1z1[1]+3*proton)/4-ammonia/4,5))))
+    
+    if(fragments=="by"){
+      a <- results_list[[sequence_number]]
+      a <- a[which(substr(a$ms2type,2,2)=="b"),]
+      a$ms2type <- paste0("[a", substr(a$ms2type,3,nchar(as.character(a$ms2type))))
+      a$ms2mz <- a$ms2mz - 27.99491
+
+      results_list[[sequence_number]] <- rbind(results_list[[sequence_number]],
+                                               a)
+    }
   }
   return(as.data.frame(do.call("rbind", results_list)))
 }

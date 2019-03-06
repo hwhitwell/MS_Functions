@@ -6,6 +6,7 @@ library(compiler)
 library(Hmisc)
 library(ROCR)
 library(pROC)
+library(dplyr)
 
 proton <- 1.00727646687991
 
@@ -114,13 +115,13 @@ sequencepairs <- function(data, rtInterval=120, massShift=4, binwidth=100, numPe
   return(potentialSpectra)
 }
 
-precursorPlot <- function(data, scan, mzRange=NA, labels=T, numLabels=NA, datahead=NA){
+precursorPlot <- function(data, scan, mzRange=NA, labels=T, numLabels=NA, datahead=NA, labelSep=0.3, centroid=T){
   if(!is.data.frame(datahead)){
     datahead <- header(data) 
   }
   RT <- datahead[scan,"retentionTime"]
   
-  peaks <- as.matrix(peaks(data,scan))
+  peaks <- as.matrix(peaks(data,which(datahead$seqNum==scan)))
   peaks <- as.data.frame(peaks)
   
   if(!is.na(mzRange))
@@ -128,18 +129,33 @@ precursorPlot <- function(data, scan, mzRange=NA, labels=T, numLabels=NA, datahe
   
   peaks[,2] <- peaks[,2]/max(peaks[,2])*100
   
+  if(centroid){
+    plot <- ggplot() + 
+      geom_linerange(data=peaks,aes(x=V1,ymin=0,ymax=V2)) + 
+      ggtitle("",subtitle=paste0("Scan = ",scan, ", RT = ",round(RT/60,2))) +
+      ylab("Normalised Intensity") +
+      xlab("m/z")
+  } else {
+    plot <- ggplot() + 
+      geom_path(data=peaks,aes(x=V1,y=V2)) + 
+      ggtitle("",subtitle=paste0("Scan = ",scan, ", RT = ",round(RT/60,2))) +
+      ylab("Normalised Intensity") +
+      xlab("m/z")
+  }
   
-  plot <- ggplot() + 
-    geom_linerange(data=peaks,aes(x=V1,ymin=0,ymax=V2)) + 
-    ggtitle("",subtitle=paste0("Scan = ",scan, ", RT = ",round(RT/60,2))) +
-    ylab("Normalised Intensity") +
-    xlab("m/z")
   
   if(labels){
     peaks <- peaks[order(peaks$V2,decreasing = T),]
     peakslabel <- peaks[!duplicated(round(peaks[,1],1)),]
+    for(i in 1:nrow(peakslabel)){
+      remove <- which(abs(peakslabel$V1-peakslabel$V1[i])<=labelSep)
+      if(length(remove)>1){
+        remove <- remove[-1]
+        peakslabel <- peakslabel[-remove,]
+      }
+    }
     if(!is.na(numLabels)){
-      peakslabel <- peakslabel[order(peakslabel[,2],decreasing=T),][1:numLabels,]
+      peakslabel <- peakslabel[order(peakslabel[,2],decreasing=T),][1:min(numLabels,nrow(peakslabel)),]
     }
     plot <- plot + geom_text_repel(data=peakslabel,aes(x=V1,y=V2+2,label=as.character(round(V1,1))),color="blue")
   }
@@ -147,7 +163,7 @@ precursorPlot <- function(data, scan, mzRange=NA, labels=T, numLabels=NA, datahe
 }
 
 #Generates a plot from MS peak list with peak filtering
-spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLabels=NA, precursorCharge=NA, subtitle="mz", datahead=NA){
+spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLabels=NA, precursorCharge=NA, subtitle="mz", datahead=NA, labelSep=5){
   if(subtitle!="mz" & subtitle!="Da")
     return("Subtitle must be `mz` or `Da`")
   
@@ -179,24 +195,106 @@ spectraplot <- function(data, scan, binwidth=100, numPerBin=10, labels=T, numLab
   if(labels){
     peaks <- peaks[order(peaks$V2,decreasing = T),]
     peakslabel <- peaks[!duplicated(round(peaks[,1],1)),]
+    
+    if(is.numeric(labelSep)){
+      for(i in 1:nrow(peakslabel)){
+        remove <- which(abs(peakslabel[,1]-peakslabel[i,1])<=labelSep)
+        if(length(remove)>1){
+          remove <- remove[-1]
+          peakslabel <- peakslabel[-remove,]
+        }
+      } 
+    }
+    
     if(!is.na(numLabels)){
       peakslabel <- peakslabel[order(peakslabel[,2],decreasing=T),][1:numLabels,]
     }
+    
     plot <- plot + geom_text_repel(data=peakslabel,aes(x=V1,y=V2+1,label=as.character(round(V1,1))),color="blue")
   }
   return(plot)
 }
 
 #Puts two spectra next to each other (calls spectraplot twice)
-sideBySidePlot <- function(data,scan1,scan2, binwidth=100, numPerBin=10, labels=T, numLabels=NA, datahead=NA){
-  
+sideBySidePlot <- function(data,scan1,scan2, binwidth=100, numPerBin=10, labels=T, numLabels=NA, datahead=NA, matching=F, massShift=4.022185, xlims=NA, labelSep=5, legend=T, textSize=7){
   if(!is.data.frame(datahead)){
     datahead <- header(data)
   }
   
-  plot1 <- spectraplot(data,scan1,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead)
-  plot2 <- spectraplot(data,scan2,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead)
-  return(plot_grid(plot1,plot2))
+  datahead$precursorDa <- precursorMass(datahead)
+  
+  #make sure the higher Da is scan2
+  if(datahead$precursorDa[scan1]>datahead$precursorDa[scan2]){
+    temp <- scan1
+    scan1 <- scan2
+    scan2 <- temp
+    rm(temp)
+  }
+  
+  if(is.na(xlims)){
+    scan1lim <- range(peaks(data,scan1)[,1])
+    scan2lim <- range(peaks(data,scan2)[,1])
+    xlims <- c(min(scan1lim,scan2lim),max(scan1lim,scan2lim)+1)
+  }
+  
+  if(matching){
+    plot1 <- spectraplot(data,scan1,binwidth=binwidth,numPerBin=numPerBin, labels=F, datahead=datahead)
+    plot2 <- spectraplot(data,scan2,binwidth=binwidth,numPerBin=numPerBin, labels=F, datahead=datahead)
+    
+    matchedRegression(data,datahead, scan1, scan2, binwidth, numPerBin, massShift=massShift)
+    matchedIons$Intensity_A <- matchedIons$Intensity_A*100
+    matchedIons$Intensity_B <- matchedIons$Intensity_B*100
+    
+    same <- subset(matchedIons, Type=="Same")
+    same <- rbind(same,data.frame(MZ=xlims,Intensity_A=c(0,0),Intensity_B=c(0,0),Type=rep("Complementary",2)))
+    complementary <- subset(matchedIons, Type=="Complementary")
+    complementary$MZ <- complementary$MZ + massShift
+    complementary <- rbind(complementary,data.frame(MZ=xlims,Intensity_A=c(0,0),Intensity_B=c(0,0),Type=rep("Same",2)))
+    
+    plot1 <- plot1 + geom_linerange(data=same, aes(x=MZ, ymin=0, ymax=Intensity_A, colour=Type), size=1, show.legend=legend) +
+      geom_linerange(data=complementary, aes(x=MZ, ymin=0, ymax=Intensity_A, colour=Type), size=1, show.legend=legend)
+    
+    plot2 <- plot2 + geom_linerange(data=same, aes(x=MZ, ymin=0, ymax=Intensity_B, colour=Type), size=1, show.legend=legend) +
+      geom_linerange(data=complementary, aes(x=MZ, ymin=0, ymax=Intensity_B, colour=Type), size=1, show.legend=legend)
+    
+    if(labels){
+      allLabels <- rbind(same,complementary)
+      allLabels <- subset(allLabels,Intensity_A!=0)
+      
+      plot1labels <- allLabels[order(allLabels$Intensity_A,decreasing=T),]
+      plot1labels[which(plot1labels$Type=="Complementary"),"MZ"] <- plot1labels[which(plot1labels$Type=="Complementary"),"MZ"]-massShift
+      for(i in 1:nrow(plot1labels)){
+        remove <- which(abs(plot1labels$MZ-plot1labels$MZ[i])<=labelSep)
+        if(length(remove)>1){
+          remove <- remove[-1]
+          plot1labels <- plot1labels[-remove,]
+        }
+      }
+      
+      plot2labels <- allLabels[order(allLabels$Intensity_B,decreasing=T),]
+      for(i in 1:nrow(plot2labels)){
+        remove <- which(abs(plot2labels$MZ-plot2labels$MZ[i])<=labelSep)
+        if(length(remove)>1){
+          remove <- remove[-1]
+          plot2labels <- plot2labels[-remove,]
+        }
+      }
+      
+      plot1 <- plot1 + geom_text_repel(data=plot1labels, aes(x=MZ, y=Intensity_A+1, label=as.character(round(MZ,1))), colour="blue") +
+        ylim(0,105)
+      plot2 <- plot2 + geom_text_repel(data=plot2labels, aes(x=MZ, y=Intensity_B+1, label=as.character(round(MZ,1))), colour="blue") +
+        ylim(0,105)
+    }
+  } else {
+    plot1 <- spectraplot(data,scan1,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead) +
+      geom_linerange(aes(x=xlims,ymin=0,ymax=0))
+    plot2 <- spectraplot(data,scan2,binwidth=binwidth,numPerBin=numPerBin, labels=labels, numLabels=numLabels,datahead=datahead) +
+      geom_linerange(aes(x=xlims, ymin=0, ymax=0))
+  }
+  
+  plot1 <- plot1 + theme(text=element_text(size=textSize),axis.text=element_text(size=textSize),plot.title=element_text(size=textSize))
+  plot2 <- plot2 + theme(text=element_text(size=textSize),axis.text=element_text(size=textSize),plot.title=element_text(size=textSize))
+  return(plot_grid(plot1,plot2, nrow=2))
 }
 
 #Binning function - returns "numPerBin" peaks in each bin "binwidth" along spectra
@@ -205,7 +303,7 @@ binning <- function(peaks, binwidth, numPerBin){
   peaks <- peaks[order(peaks[,2],decreasing=T),]
   x <- min(peaks[,1])
   while(x<max(peaks[,1])){
-    range <- which(peaks[,1]>x & peaks[,1]<(x+binwidth))
+    range <- which(peaks[,1]>=x & peaks[,1]<(x+binwidth))
     if(length(range)!=0){
       temp <- peaks[range,]
       temp <- temp[1:min(nrow(temp),numPerBin),]
@@ -327,6 +425,8 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
       if(nrow(complementaryA)>0 & nrow(complementaryB)>0){
         results <- cbind(complementaryA,complementaryB)
         results <- results[!duplicated(results),]
+      } else {
+        return(data.frame(A=numeric(0),B=numeric(0)))
       }
       
       if(nrow(complementaryA)<3 & nrow(complementaryB)<3){
@@ -348,12 +448,17 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
         thresholdedGdt <- "cutoff not set"
         thresholdedPPMCC <- "cutoff not set"
         
+        #If using a prodcutCutoff value, the product of the matched intensities is calculated.
+        #All ions below the threshold are discarded and replaced with a point at the origin (x=0,y=0).
+        #If the number of remaining matches is greater than the number of theoretical aa -1, then a
+        #correlation and gradient is determined. The origin point, makes sure the regression is realistic
+        #and provides an anchor for the correlation coefficient which otherwise would lack the low intensity ions.
         if(!is.na(productCutoff)){
           allMatchedMZ$Product <- with(allMatchedMZ, Intensity_A*Intensity_B)
           allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product > productCutoff),]
-          num_aa <- (datahead[A,"precursorDa"]/110)-1
+          num_aa <- round((datahead[A,"precursorDa"]/110)-1,0)
           allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product>productCutoff),]
-          allMatchedMZ <- rbind(allMatchedMZ,c(0,0,0,NA,0))
+          allMatchedMZ <- rbind(allMatchedMZ,data.frame(MZ=0,Intensity_A=0,Intensity_B=0,Type="Same",Product=0))
           thresholdedGdt <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,lm(Intensity_B~Intensity_A))$coefficients[[2]],"Below threshold")
           thresholdedPPMCC <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,cor(Intensity_B,Intensity_A)), "Below threshold")
         }
@@ -424,7 +529,7 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
         print(complementPlot)
         
         allPlot <<- ggplot(allMatchedMZ, aes(Intensity_A,Intensity_B)) +
-          geom_point(aes(colour=MZ)) +
+          geom_point(aes(colour=Type)) +
           geom_smooth(method="lm") +
           ylab(paste0("Intensity (",B,")")) +
           xlab(paste0("Intensity (",A,")")) +
@@ -433,15 +538,16 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
           scale_x_log10()
         print(allPlot)
       }
-    } else {complementaryResults <- c(NA,NA,NA,NA)
-    results <- data.frame("MZ_A"=NA,"Intensity_A"=NA,"MZ_B"=NA,"Intensity_B"=NA)
-    ComplementaryGdt=NA
-    allResults <- c(NA,NA)
-    AllGdt=NA
-    allMatchedMZ <- hits
-    allMatchedMZ <- cbind(allMatchedMZ,data.frame(Type=rep("Same",nrow(allMatchedMZ)),Product=rep(0,nrow(allMatchedMZ))))
-    correlation <- c(NA,NA)
-    Gdt <- NA
+    } else {
+      complementaryResults <- c(NA,NA,NA,NA)
+      results <- data.frame("MZ_A"=NA,"Intensity_A"=NA,"MZ_B"=NA,"Intensity_B"=NA)
+      ComplementaryGdt=NA
+      allResults <- c(NA,NA)
+      AllGdt=NA
+      allMatchedMZ <- hits
+      allMatchedMZ <- cbind(allMatchedMZ,data.frame(Type=rep("Same",nrow(allMatchedMZ)),Product=rep(0,nrow(allMatchedMZ))))
+      correlation <- c(NA,NA)
+      Gdt <- NA
     }
     colnames(results) <- c("MZ_A","Intensity_A","MZ_B","Intensity_B")
   } else {
@@ -453,15 +559,17 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
   
   if(!is.na(productCutoff)){
     allMatchedMZ$Product <- with(allMatchedMZ, Intensity_A*Intensity_B)
+    mzForPlot <- allMatchedMZ
     allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product > productCutoff),]
-    num_aa <- (datahead[A,"precursorDa"]/110)-1
-    allMatchedMZ <- allMatchedMZ[which(allMatchedMZ$Product>productCutoff),]
-    allMatchedMZ <- rbind(allMatchedMZ,c(0,0,0,NA,0))
+    num_aa <- round((datahead[A,"precursorDa"]/110)-1,0)
+    allMatchedMZ <- rbind(allMatchedMZ,data.frame(MZ=0,Intensity_A=0,Intensity_B=0,Type="Same",Product=0))
+    allMatchedMZ$Intensity_A <- as.numeric(allMatchedMZ$Intensity_A)
+    allMatchedMZ$Intensity_B <- as.numeric(allMatchedMZ$Intensity_B)
     thresholdedGdt <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,lm(Intensity_B~Intensity_A))$coefficients[[2]],"Below threshold")
     thresholdedPPMCC <- ifelse((nrow(allMatchedMZ)-1)>=num_aa,with(allMatchedMZ,cor(Intensity_B,Intensity_A)), "Below threshold")
   }
   
-  if(plot==T & nrow(allMatchedMZ)>0){
+  if(plot & nrow(allMatchedMZ)>0){
     x <- seq(0,1,0.0001)
     y <- productCutoff/x
     
@@ -473,7 +581,7 @@ matchedRegression <- function(data, datahead=NA, A, B, binwidth=100, numPerBin=1
     
     cutoffPlot <<- ggplot(points, aes(x,y)) +
       geom_polygon(fill="blue",alpha=0.3) +
-      geom_point(data=allMatchedMZ, aes(x=Intensity_A,y=Intensity_B,colour=Type)) +
+      geom_point(data=mzForPlot, aes(x=Intensity_A,y=Intensity_B,colour=Type)) +
       ylab(paste0("Intensity (",B,")")) +
       xlab(paste0("Intensity (",A,")")) +
       scale_x_log10() +
@@ -538,6 +646,8 @@ regressionPairs <- function(data, rtInterval=120, massShift=4.022185, binwidth=1
                         "AllPVal"=numeric(0),
                         "AllGdt"=numeric(0),
                         "NumHits"=numeric(0),
+                        "thresholdedGdt"=numeric(0),
+                        "thresholdedPPMCC"=numeric(0),
                         "HitIntensity_A"=numeric(0),
                         "HitIntensity_B"=numeric(0),
                         "ComplementaryHits"=numeric(0),
@@ -569,6 +679,8 @@ regressionPairs <- function(data, rtInterval=120, massShift=4.022185, binwidth=1
                               "AllPVal"=numeric(0),
                               "AllGdt"=numeric(0),
                               "NumHits"=numeric(0),
+                              "thresholdedGdt"=numeric(0),
+                              "thresholdedPPMCC"=numeric(0),
                               "HitIntensity_A"=numeric(0),
                               "HitIntensity_B"=numeric(0),
                               "ComplementaryHits"=numeric(0),
